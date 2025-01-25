@@ -13,6 +13,10 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort)
 __global__ 
 void saxpy_gpu (float* x, float* y, float scale, int size) {
 	//	Insert GPU SAXPY kernel code here
+	int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+	if(i < size)
+		y[i] = scale * x[i] + y[i];
 }
 
 int runGpuSaxpy(int vectorSize) {
@@ -20,8 +24,81 @@ int runGpuSaxpy(int vectorSize) {
 	std::cout << "Hello GPU Saxpy!\n";
 
 	//	Insert code here
-	std::cout << "Lazy, you are!\n";
-	std::cout << "Write code, you must\n";
+
+	// On host memory
+	float *a, *b, *c;
+
+    a = (float*)malloc(vectorSize * sizeof(float));
+    b = (float*)malloc(vectorSize * sizeof(float));
+    c = (float*)malloc(vectorSize * sizeof(float));
+
+    if (a == NULL || b == NULL || c == NULL) {
+        printf("Unable to malloc memory ... Exiting!");
+        return -1;
+    }
+
+	// Initialize vectors/inputs
+	vectorInit(a, vectorSize);
+	vectorInit(b, vectorSize);
+	float scale = 2.0f;
+
+	#ifndef DEBUG_PRINT_DISABLE 
+		printf("\n Adding vectors : \n");
+		printf(" scale = %f\n", scale);
+		printf(" a = { ");
+		for (int i = 0; i < 5; ++i) {
+			printf("%3.4f, ", a[i]);
+		}
+		printf(" ... }\n");
+		printf(" b = { ");
+		for (int i = 0; i < 5; ++i) {
+			printf("%3.4f, ", b[i]);
+		}
+		printf(" ... }\n");
+	#endif
+
+
+	// Allocate vectors in device memory
+	float* d_A;
+    float* d_B;
+
+    cudaMalloc(&d_A, vectorSize * sizeof(float));
+    cudaMalloc(&d_B, vectorSize * sizeof(float));
+
+	// Copy vectors from host memory to device memory
+	size_t size = vectorSize * sizeof(float);
+
+	cudaMemcpy(d_A, a, size, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_B, b, size, cudaMemcpyHostToDevice);
+
+	// Invoke kernel
+    int threadsPerBlock = 256;
+    int blocksPerGrid = (vectorSize + threadsPerBlock - 1) / threadsPerBlock;
+
+	saxpy_gpu<<<blocksPerGrid, threadsPerBlock>>>(d_A, d_B, scale, vectorSize);
+
+	// Copy result from device memory to host memory
+    cudaMemcpy(c, d_B, size, cudaMemcpyDeviceToHost);
+
+	#ifndef DEBUG_PRINT_DISABLE 
+		printf(" c = { ");
+		for (int i = 0; i < 5; ++i) {
+			printf("%3.4f, ", c[i]);
+		}
+		printf(" ... }\n");
+	#endif
+
+	int errorCount = verifyVector(a, b, c, scale, vectorSize);
+	std::cout << "Found " << errorCount << " / " << vectorSize << " errors \n";
+
+	// Free device memory
+    cudaFree(d_A);
+    cudaFree(d_B);
+
+	// Free host memory
+
+	// std::cout << "Lazy, you are!\n";
+	// std::cout << "Write code, you must\n";
 
 	return 0;
 }
