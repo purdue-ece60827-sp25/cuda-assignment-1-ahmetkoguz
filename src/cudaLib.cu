@@ -1,5 +1,6 @@
 
 #include "cudaLib.cuh"
+#define DEBUG_PRINT_DISABLE
 
 inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort)
 {
@@ -24,6 +25,10 @@ int runGpuSaxpy(int vectorSize) {
 	std::cout << "Hello GPU Saxpy!\n";
 
 	//	Insert code here
+
+	// #ifndef DEBUG_PRINT_DISABLE 
+	// 	printf("vectorsize = %d\n", vectorSize);
+	// #endif
 
 	// On host memory
 	float *a, *b, *c;
@@ -118,6 +123,24 @@ int runGpuSaxpy(int vectorSize) {
 __global__
 void generatePoints (uint64_t * pSums, uint64_t pSumSize, uint64_t sampleSize) {
 	//	Insert code here
+	int i = blockIdx.x * blockDim.x + threadIdx.x; // Get thread ID
+	pSums[i] = 0; // Initialize hit for thread to 0
+
+	// Setup RNG
+	curandState_t rng;
+	curand_init(clock64(), i, 0, &rng);
+
+	for(int j = 0; j < sampleSize; j++) {
+		// Get a new random point
+		float x = curand_uniform(&rng);
+		float y = curand_uniform(&rng);
+
+		if(i < pSumSize) {
+			if ( int(x * x + y * y) == 0 ) {
+				pSums[i] += 1; // hit
+			}
+		}
+	}
 }
 
 __global__ 
@@ -141,6 +164,7 @@ int runGpuMCPi (uint64_t generateThreadCount, uint64_t sampleSize,
 	float approxPi = estimatePi(generateThreadCount, sampleSize, 
 		reduceThreadCount, reduceSize);
 	
+	std::cout << std::setprecision(10);
 	std::cout << "Estimated Pi = " << approxPi << "\n";
 
 	auto tEnd= std::chrono::high_resolution_clock::now();
@@ -157,7 +181,53 @@ double estimatePi(uint64_t generateThreadCount, uint64_t sampleSize,
 	double approxPi = 0;
 
 	//      Insert code here
-	std::cout << "Sneaky, you are ...\n";
-	std::cout << "Compute pi, you must!\n";
+
+	// On host memory
+	uint64_t *pSums;
+
+    pSums = (uint64_t*)malloc(generateThreadCount * sizeof(*pSums));
+
+    if (pSums == NULL) {
+        printf("Unable to malloc memory ... Exiting!");
+        return -1;
+    }
+
+	// Allocate array in device memory
+	uint64_t* d_pSums;
+
+    cudaMalloc(&d_pSums, generateThreadCount * sizeof(*d_pSums));
+
+	// Invoke kernel
+    int threadsPerBlock = 256;
+    int blocksPerGrid = (generateThreadCount + threadsPerBlock - 1) / threadsPerBlock;
+
+
+	generatePoints<<<blocksPerGrid, threadsPerBlock>>>(d_pSums, generateThreadCount, sampleSize);
+
+	// Copy result from device memory to host memory
+	size_t size = generateThreadCount * sizeof(*pSums);
+    cudaMemcpy(pSums, d_pSums, size, cudaMemcpyDeviceToHost);
+
+	// Free device memory
+    cudaFree(d_pSums);
+
+	uint64_t hitSum = 0;
+	for(int i = 0; i < generateThreadCount; i++) {
+		hitSum += pSums[i];
+	}
+
+	//	Calculate Pi
+	approxPi = ((double)hitSum / (sampleSize * generateThreadCount)); // are we going to have iteration count here?
+	approxPi = approxPi * 4.0f;
+
+	#ifndef DEBUG_PRINT_DISABLE 
+		printf("hitSum = %d\n", hitSum);
+		printf("sampleSize = %d\n", sampleSize);
+		printf("threadcount = %d\n", generateThreadCount);
+		printf("blocks = %d\n", blocksPerGrid);
+	#endif
+
+	// std::cout << "Sneaky, you are ...\n";
+	// std::cout << "Compute pi, you must!\n";
 	return approxPi;
 }
